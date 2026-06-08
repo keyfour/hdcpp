@@ -1,6 +1,8 @@
 
 # HDCPP – Header‑Only Hyperdimensional Computing Library
 
+> **Warning:** This library is a personal side project and **is not production ready**. It lacks comprehensive testing, has limited error handling, and may contain bugs. Use at your own risk.
+
 `hdcpp` is a fast, safe, and portable C++17/20 library for **hyperdimensional computing (HDC)**, also known as vector symbolic architectures (VSA). It provides efficient operations on binary hypervectors of static (compile‑time) or dynamic (runtime) dimension.
 
 ## Features
@@ -262,10 +264,29 @@ No build required – just include the header. To run a quick test, compile with
 g++ -std=c++17 -O3 -march=native -DNDEBUG my_program.cpp -o my_program
 ```
 
-For debugging:
+### CMake Integration
 
 ```bash
-g++ -std=c++17 -g -D_DEBUG my_program.cpp -o my_program_debug
+mkdir build && cd build
+cmake ..
+cmake --install .  # optional, installs to /usr/local by default
+```
+
+### Conan Integration
+
+```bash
+conan create .
+```
+
+To use in your project, add to your `conanfile.txt`:
+
+```text
+[requires]
+hdcpp/1.0.0
+
+[generators]
+CMakeDeps
+CMakeToolchain
 ```
 
 ---

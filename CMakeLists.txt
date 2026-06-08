@@ -5,7 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(hdcpp INTERFACE)
-target_include_directories(hdcpp INTERFACE include)
+target_include_directories(hdcpp INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
 
 # Compile features: popcount detection, optimisation flags (optional)
 target_compile_features(hdcpp INTERFACE cxx_std_17)
