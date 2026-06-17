@@ -54,7 +54,7 @@ All `*_inplace` methods return `*this` for chaining.
 
 2. **Bundling requires 3 vectors**: `bundle_inplace(a, b)` computes majority of `*this`, `a`, and `b`. The free function `bundle(a, b, c)` bundles three separate vectors. This is typical HD computing bundling.
 
-3. **Bounds checking is debug-only**: `get_bit`/`set_bit` only throw in debug builds (`#ifdef _DEBUG`). Release builds skip checks.
+3. **Bounds checking is debug-only**: `get_bit`/`set_bit` only throw in debug builds (`#ifndef NDEBUG`). Release builds skip checks.
 
 4. **Popcount fallback**: Uses `__builtin_popcountll` for GCC/Clang. For C++20, uses `std::popcount`. MSVC needs custom implementation.
 
