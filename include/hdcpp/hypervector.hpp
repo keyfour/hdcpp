@@ -9,6 +9,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace hdc {
@@ -26,7 +27,7 @@ template <typename T> inline constexpr int popcount_impl(T x) noexcept {
   else if constexpr (std::is_same_v<T, unsigned int>)
     return __builtin_popcount(x);
   else
-    return std::__popcount(x); // C++20 for all other unsigned types
+    return __builtin_popcount(x); // GCC/Clang for all other unsigned types
 }
 
 // Block type traits
@@ -95,7 +96,7 @@ public:
 
   // Bit access (with bounds checking in debug)
   bool get_bit(size_t pos) const {
-#ifdef _DEBUG
+#ifndef NDEBUG
     if (pos >= Dimension)
       throw std::out_of_range("bit position out of range");
 #endif
@@ -105,7 +106,7 @@ public:
   }
 
   void set_bit(size_t pos, bool value) {
-#ifdef _DEBUG
+#ifndef NDEBUG
     if (pos >= Dimension)
       throw std::out_of_range("bit position out of range");
 #endif
@@ -145,11 +146,47 @@ public:
     shift %= Dimension;
     if (shift == 0)
       return *this;
-    static_hypervector copy = *this;
-    for (size_t i = 0; i < Dimension; ++i) {
-      bool bit = copy.get_bit((i + shift) % Dimension);
-      set_bit(i, bit);
+    
+    size_t full_blocks = shift / bits_per_block;
+    size_t bit_shift = shift % bits_per_block;
+    
+    if (bit_shift == 0) {
+      // Shift by whole blocks only
+      for (size_t i = num_blocks - 1; i > full_blocks; --i)
+        data_[i] = data_[i - full_blocks];
+      for (size_t i = 0; i < full_blocks; ++i)
+        data_[i] = BlockType(0);
+    } else {
+      // Shift by partial blocks - need to handle bit-level shift
+      static_hypervector copy = *this;
+      for (size_t i = 0; i < num_blocks; ++i) {
+        size_t src_block = (i + full_blocks) % num_blocks;
+        BlockType src = copy.data_[src_block];
+        
+        if (i == src_block) {
+          // Within same block - handle bit-level shift
+          data_[i] = (src << bit_shift) | (src >> (bits_per_block - bit_shift));
+        } else {
+          // Across block boundary - combine two blocks
+          size_t prev_block = (src_block - 1 + num_blocks) % num_blocks;
+          BlockType prev = copy.data_[prev_block];
+          
+          // Bits from previous block that wrap around
+          BlockType wrap = prev >> (bits_per_block - bit_shift);
+          // Bits from current block shifted
+          BlockType shifted = src << bit_shift;
+          data_[i] = wrap | shifted;
+        }
+      }
     }
+    
+    // Zero out trailing bits in last block (if dimension not a multiple of block size)
+    if constexpr (Dimension % bits_per_block != 0) {
+      constexpr size_t valid_bits = Dimension % bits_per_block;
+      constexpr BlockType mask = (BlockType(1) << valid_bits) - 1;
+      data_.back() &= mask;
+    }
+    
     return *this;
   }
 
@@ -250,9 +287,14 @@ public:
 
   // Copy and move
   dynamic_hypervector(const dynamic_hypervector &) = default;
-  dynamic_hypervector(dynamic_hypervector &&) noexcept = default;
+  dynamic_hypervector(dynamic_hypervector &&other) noexcept
+      : dim_(std::exchange(other.dim_, 0)), data_(std::move(other.data_)) {}
   dynamic_hypervector &operator=(const dynamic_hypervector &) = default;
-  dynamic_hypervector &operator=(dynamic_hypervector &&) noexcept = default;
+  dynamic_hypervector &operator=(dynamic_hypervector &&other) noexcept {
+    dim_ = std::exchange(other.dim_, 0);
+    data_ = std::move(other.data_);
+    return *this;
+  }
 
   // Accessors
   size_t dimension() const noexcept { return dim_; }
@@ -303,11 +345,44 @@ public:
     shift %= dim_;
     if (shift == 0)
       return *this;
-    dynamic_hypervector copy = *this;
-    for (size_t i = 0; i < dim_; ++i) {
-      bool bit = copy.get_bit((i + shift) % dim_);
-      set_bit(i, bit);
+    
+    size_t full_blocks = shift / bits_per_block;
+    size_t bit_shift = shift % bits_per_block;
+    size_t num_blocks = data_.size();
+    
+    if (bit_shift == 0) {
+      // Shift by whole blocks only
+      for (size_t i = num_blocks - 1; i > full_blocks; --i)
+        data_[i] = data_[i - full_blocks];
+      for (size_t i = 0; i < full_blocks; ++i)
+        data_[i] = BlockType(0);
+    } else {
+      // Shift by partial blocks - need to handle bit-level shift
+      dynamic_hypervector copy = *this;
+      for (size_t i = 0; i < num_blocks; ++i) {
+        size_t src_block = (i + full_blocks) % num_blocks;
+        BlockType src = copy.data_[src_block];
+        
+        if (i == src_block) {
+          // Within same block - handle bit-level shift
+          data_[i] = (src << bit_shift) | (src >> (bits_per_block - bit_shift));
+        } else {
+          // Across block boundary - combine two blocks
+          size_t prev_block = (src_block - 1 + num_blocks) % num_blocks;
+          BlockType prev = copy.data_[prev_block];
+          
+          // Bits from previous block that wrap around
+          BlockType wrap = prev >> (bits_per_block - bit_shift);
+          // Bits from current block shifted
+          BlockType shifted = src << bit_shift;
+          data_[i] = wrap | shifted;
+        }
+      }
     }
+    
+    // Zero out trailing bits in last block (if dimension not a multiple of block size)
+    sanitize_last_block();
+    
     return *this;
   }
 
@@ -365,6 +440,27 @@ template <typename Hypervec>
 Hypervec bundle(const Hypervec &a, const Hypervec &b, const Hypervec &c) {
   Hypervec result = a;
   result.bundle_inplace(b, c);
+  return result;
+}
+
+template <typename Hypervec>
+Hypervec bundle_n(std::initializer_list<Hypervec> hvs) {
+  if (hvs.size() == 0)
+    return Hypervec();
+  if (hvs.size() == 1)
+    return *hvs.begin();
+  if (hvs.size() == 2) {
+    auto it = hvs.begin();
+    return bind(*it, *(std::next(it)));
+  }
+  
+  Hypervec result = *hvs.begin();
+  auto it = std::next(hvs.begin());
+  while (it != hvs.end()) {
+    Hypervec temp = result;
+    result.bundle_inplace(*it, temp);
+    ++it;
+  }
   return result;
 }
 
