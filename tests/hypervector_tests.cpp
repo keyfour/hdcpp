@@ -4,6 +4,7 @@
 #include <cassert>
 #include <iostream>
 #include <stdexcept>
+#include <utility>
 
 using namespace hdc;
 
@@ -208,6 +209,95 @@ int main() {
       threw = true;
     }
     check("dynamic dim 0 throws", threw, true);
+  }
+
+  // --- edge: dimension exactly a multiple of block size (no trailing bits) ---
+  {
+    // dynamic, dim == bits_per_block (64) -> extra_bits == 0 path
+    dynamic_hypervector<uint64_t> a(64, false), b(64, false);
+    a.set_bit(0, true);
+    b.set_bit(63, true);
+    check("dim=multiple hamming", a.hamming_distance(b), size_t{2});
+    check("dim=multiple dot", a.dot_product(b), int64_t{60});
+    check("dim=multiple dot self", a.dot_product(a), int64_t{64});
+
+    // static, dim == 64
+    static_hypervector<64> s(false), t(false);
+    s.set_bit(0, true);
+    t.set_bit(63, true);
+    check("static dim=multiple hamming", s.hamming_distance(t), size_t{2});
+    check("static dim=multiple dot self", s.dot_product(s), int64_t{64});
+  }
+
+  // --- edge: small BlockType (uint8_t) spanning multiple blocks ---
+  {
+    // dim=10 with uint8_t -> 2 blocks (8 + 2 bits); per-block mask must not
+    // overflow (1 << 8 would be UB for uint8_t; code guards valid_bits<8).
+    dynamic_hypervector<uint8_t> a(10, false), b(10, false);
+    a.set_bit(0, true);
+    a.set_bit(9, true);
+    b.set_bit(0, true);
+    b.set_bit(9, true);
+    check("u8 hamming equal", a.hamming_distance(b), size_t{0});
+    check("u8 dot self", a.dot_product(a), int64_t{10});
+    check("u8 last block sanitized", (a.blocks().back() >> 2) == 0, true);
+
+    static_hypervector<10, uint8_t> s({uint8_t{0xFF}});
+    static_hypervector<10, uint8_t> z(false);
+    check("u8 static ctor trailing hamming", s.hamming_distance(z), size_t{8});
+  }
+
+  // --- edge: free functions with static_hypervector ---
+  {
+    static_hypervector<8> a(false), b(false);
+    a.set_bit(0, true);
+    b.set_bit(0, true);
+    auto c = bind(a, b);
+    check("static free bind self=0",
+          c == static_hypervector<8>(false), true);
+    auto p = permute(a, 3);
+    // left cyclic shift by 3: old bit0 -> new bit5
+    check("static free permute", p.get_bit(5), true);
+    check("static free permute cleared", p.get_bit(0), false);
+  }
+
+  // --- edge: equality with mismatched dimensions (dynamic) ---
+  {
+    dynamic_hypervector<uint64_t> a(8, false), b(10, false);
+    check("dynamic != on dim mismatch", a == b, false);
+    check("dynamic == on same dim/contents",
+          (a == dynamic_hypervector<uint64_t>(8, false)), true);
+  }
+
+  // --- edge: bundle_inplace with non-empty *this* (3-way majority) ---
+  {
+    dynamic_hypervector<uint64_t> base(8, false), x(8, false), y(8, false);
+    base.set_bit(1, true); // base has bit1
+    x.set_bit(1, true);    // x has bit1 -> majority with base
+    y.set_bit(4, true);    // y only here
+    base.bundle_inplace(x, y);
+    check("bundle_inplace uses *this* majority", base.get_bit(1), true);
+    check("bundle_inplace no majority elsewhere", base.get_bit(4), false);
+  }
+
+  // --- edge: permute_inplace shift==0 is identity (early return) ---
+  {
+    dynamic_hypervector<uint64_t> a(8, false);
+    a.set_bit(3, true);
+    auto b = a;
+    b.permute_inplace(0);
+    check("permute_inplace shift 0 identity", b == a, true);
+  }
+
+  // --- edge: copy/move of dynamic_hypervector preserves contents ---
+  {
+    dynamic_hypervector<uint64_t> a(8, false);
+    a.set_bit(2, true);
+    auto cp = a; // copy
+    check("dynamic copy equal", cp == a, true);
+    auto mv = std::move(a); // move
+    check("dynamic move equal", mv == cp, true);
+    check("dynamic blocks() size", mv.blocks().size() == 1, true);
   }
 
   if (failures == 0) {

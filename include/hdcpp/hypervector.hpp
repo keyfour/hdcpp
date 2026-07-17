@@ -18,19 +18,23 @@ namespace hdc {
 // -----------------------------------------------------------------------------
 
 // Popcount: prefer the standard C++20 std::popcount, fall back to compiler
-// builtins only when the standard function is unavailable.
+// builtins only when the standard function is unavailable. The argument is
+// converted to its unsigned counterpart so that integer-promoted types
+// (e.g. uint8_t -> int) still resolve to an unsigned popcount overload.
 template <typename T> inline constexpr int popcount_impl(T x) noexcept {
+  using U = std::make_unsigned_t<T>;
+  U ux = static_cast<U>(x);
 #if defined(__cpp_lib_bitops) && __cpp_lib_bitops >= 201907L
-  return static_cast<int>(std::popcount(x));
+  return static_cast<int>(std::popcount(ux));
 #else
-  if constexpr (std::is_same_v<T, unsigned long long>)
-    return __builtin_popcountll(x); // GCC/Clang
-  else if constexpr (std::is_same_v<T, unsigned long>)
-    return __builtin_popcountl(x);
-  else if constexpr (std::is_same_v<T, unsigned int>)
-    return __builtin_popcount(x);
+  if constexpr (std::is_same_v<U, unsigned long long>)
+    return __builtin_popcountll(ux); // GCC/Clang
+  else if constexpr (std::is_same_v<U, unsigned long>)
+    return __builtin_popcountl(ux);
+  else if constexpr (std::is_same_v<U, unsigned int>)
+    return __builtin_popcount(ux);
   else
-    return static_cast<int>(std::popcount(x)); // C++20 for all other types
+    return static_cast<int>(std::popcount(ux)); // C++20 for all other types
 #endif
 }
 
