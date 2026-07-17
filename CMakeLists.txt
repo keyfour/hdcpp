@@ -18,3 +18,13 @@ include(GNUInstallDirs)
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(TARGETS hdcpp EXPORT hdcppTargets)
 install(EXPORT hdcppTargets DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hdcpp)
+
+# Tests
+option(HDCPP_BUILD_TESTS "Build hdcpp tests" ON)
+if(HDCPP_BUILD_TESTS)
+  enable_testing()
+  add_executable(hdcpp_tests tests/hypervector_tests.cpp)
+  target_link_libraries(hdcpp_tests PRIVATE hdcpp)
+  target_compile_features(hdcpp_tests PRIVATE cxx_std_20)
+  add_test(NAME hdcpp_tests COMMAND hdcpp_tests)
+endif()
