@@ -17,16 +17,25 @@ namespace hdc {
 // Internal utilities
 // -----------------------------------------------------------------------------
 
-// Popcount: fallback for compilers without C++20 std::popcount
+// Popcount: prefer the standard C++20 std::popcount, fall back to compiler
+// builtins only when the standard function is unavailable. The argument is
+// converted to its unsigned counterpart so that integer-promoted types
+// (e.g. uint8_t -> int) still resolve to an unsigned popcount overload.
 template <typename T> inline constexpr int popcount_impl(T x) noexcept {
-  if constexpr (std::is_same_v<T, unsigned long long>)
-    return __builtin_popcountll(x); // GCC/Clang
-  else if constexpr (std::is_same_v<T, unsigned long>)
-    return __builtin_popcountl(x);
-  else if constexpr (std::is_same_v<T, unsigned int>)
-    return __builtin_popcount(x);
+  using U = std::make_unsigned_t<T>;
+  U ux = static_cast<U>(x);
+#if defined(__cpp_lib_bitops) && __cpp_lib_bitops >= 201907L
+  return static_cast<int>(std::popcount(ux));
+#else
+  if constexpr (std::is_same_v<U, unsigned long long>)
+    return __builtin_popcountll(ux); // GCC/Clang
+  else if constexpr (std::is_same_v<U, unsigned long>)
+    return __builtin_popcountl(ux);
+  else if constexpr (std::is_same_v<U, unsigned int>)
+    return __builtin_popcount(ux);
   else
-    return std::__popcount(x); // C++20 for all other unsigned types
+    return static_cast<int>(std::popcount(ux)); // C++20 for all other types
+#endif
 }
 
 // Block type traits
@@ -83,6 +92,13 @@ public:
     for (; it != data_.end() && blk != blocks.end(); ++it, ++blk)
       *it = *blk;
     // remaining blocks stay zero
+    // Zero out trailing bits in the last block (if dimension not a multiple of
+    // block size) so that unused high bits never affect comparison / distance.
+    if constexpr (Dimension % bits_per_block != 0) {
+      constexpr size_t valid_bits = Dimension % bits_per_block;
+      constexpr BlockType mask = (BlockType(1) << valid_bits) - 1;
+      data_.back() &= mask;
+    }
   }
 
   // Access raw block (read‑only)
@@ -93,22 +109,18 @@ public:
     data_[idx] = value;
   }
 
-  // Bit access (with bounds checking in debug)
+  // Bit access (with bounds checking)
   bool get_bit(size_t pos) const {
-#ifdef _DEBUG
     if (pos >= Dimension)
       throw std::out_of_range("bit position out of range");
-#endif
     size_t block_idx = pos / bits_per_block;
     size_t bit_idx = pos % bits_per_block;
     return (data_[block_idx] >> bit_idx) & 1;
   }
 
   void set_bit(size_t pos, bool value) {
-#ifdef _DEBUG
     if (pos >= Dimension)
       throw std::out_of_range("bit position out of range");
-#endif
     size_t block_idx = pos / bits_per_block;
     size_t bit_idx = pos % bits_per_block;
     if (value)
@@ -224,6 +236,12 @@ template <typename BlockType = uint64_t> class dynamic_hypervector {
   size_t dim_;
   std::vector<BlockType> data_;
 
+  static size_t check_dim(size_t dimension) {
+    if (dimension == 0)
+      throw std::invalid_argument("dimension must be positive");
+    return dimension;
+  }
+
   // helper to zero out unused bits in last block
   void sanitize_last_block() noexcept {
     if (dim_ % bits_per_block != 0) {
@@ -239,12 +257,14 @@ public:
 
   // Constructor: create zero hypervector of given dimension
   explicit dynamic_hypervector(size_t dimension)
-      : dim_(dimension), data_(num_blocks_for_dim<BlockType>(dimension), 0) {}
+      : dim_(check_dim(dimension)),
+        data_(num_blocks_for_dim<BlockType>(dim_), 0) {}
 
   // Fill with constant bit
   dynamic_hypervector(size_t dimension, bool bit)
-      : dim_(dimension), data_(num_blocks_for_dim<BlockType>(dimension),
-                               bit ? ~BlockType(0) : BlockType(0)) {
+      : dim_(check_dim(dimension)),
+        data_(num_blocks_for_dim<BlockType>(dim_),
+              bit ? ~BlockType(0) : BlockType(0)) {
     sanitize_last_block();
   }
 
